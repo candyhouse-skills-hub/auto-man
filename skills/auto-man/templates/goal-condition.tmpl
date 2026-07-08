@@ -1,0 +1,33 @@
+# /goal condition template
+#
+# Fill the {{PLACEHOLDER}} fields for the target project, then pass the resulting
+# text verbatim as the argument to `/goal`. The evaluator only judges by this exact
+# text against the conversation so far — nothing here is enforced unless it is
+# written into the condition itself. All four stop signals below are mandatory;
+# do not ship a condition with only the success clause.
+#
+# {{JUDGE_CLAUSE}}: only include a judge sub-clause in the success condition when
+# this task has any criterion that needs semantic/visual judgment (does it look
+# right, does it read correctly, is the behavior actually acceptable) rather than
+# a plain deterministic check. Use generic field names in that sub-clause —
+# `verdict`/`pass`, not something UI-specific like `rendered` — since the judge
+# may be evaluating text, an API response, a file diff, or a screenshot depending
+# on the task. If every criterion is deterministic, leave {{JUDGE_CLAUSE}} empty
+# (the sentence still reads fine ending on "allPass=true)."): the success stop
+# then depends only on evidence.json's allPass, and no judge subagent is spawned
+# at all (per the cost-control principle — a judge subagent is a real cost, not
+# a default step). When it does apply, fill it with something like:
+#   , and the independent judge subagent has returned a structured verdict
+#   (verdict=pass, issues empty or all known-exempt)
+
+Success stop: {{SUCCESS_CRITERIA}}, and the conversation has posted verify.sh's evidence.json (allPass=true){{JUDGE_CLAUSE}}.
+
+Safety stop: {{MAX_TURNS}} turns have elapsed without reaching the success stop above — stop immediately, report which acceptance criteria are met/pending, and do not keep attempting.
+
+No-progress stop: the criteriaMet list has shown zero change for {{NO_PROGRESS_TURNS}} (default 3) consecutive turns — stop immediately and report exactly which criterion is stuck and the most recent concrete error.
+
+Blocked escalation: something has come up that only a human can resolve (missing credentials, a license/signing prompt, a request outside the authorized scope such as needing to touch backend code or run git push) — stop immediately, report the blocker, and do not spend remaining turns trying to work around it.
+
+{{SCOPE_EXEMPTIONS}}  <!-- Example: "known-unfixable network/CORS failures are exempt and do not count against allPass" -->
+
+Do not declare the task complete unless every clause of the success stop is satisfied.

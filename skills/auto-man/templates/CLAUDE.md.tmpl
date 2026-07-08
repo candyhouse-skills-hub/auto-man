@@ -1,0 +1,38 @@
+<!-- BEGIN auto-man workflow conventions (injected from the auto-man skill's templates/) -->
+
+## Auto-man workflow conventions
+
+This section is injected by the auto-man skill. Do not change the structure — only fill in `{{...}}` placeholders.
+
+**Scope statement**: {{SCOPE_STATEMENT}}
+<!-- Example: "backend-only, do not touch the frontend build, no git push" -->
+
+### Non-interactive execution (never invoke a command that would prompt interactively)
+- Pass every required argument to CLI init/setup commands up front — never rely on interactive prompts to fill them in.
+- Route license/confirmation prompts through a non-interactive flag or a piped confirmation.
+- Any long-lived background process this task needs (a dev server, an emulator, a watcher) must start with its non-interactive/headless flags and be launched in the background, not left blocking the foreground.
+
+If a domain recipe under `${CLAUDE_SKILL_DIR}/recipes/` matched this project, its "CLAUDE.md conventions" section lists the concrete non-interactive flags for that domain's tools — use those instead of guessing.
+
+### Long-running commands
+Any command expected to run longer than 30s: launch it in the background and poll/wait for completion — don't block the foreground burning turns on an empty wait.
+
+### New-session startup check (look at current state before redoing work)
+When a new `/goal` session starts (especially repeated runs in the hands-off phase), check whether the target process/service/artifact from a prior run is already up before redoing setup work. If it's already running, go straight to re-collecting evidence (rerun `verify.sh` + the judge subagent if one applies) instead of defaulting to re-running the entire install/build/launch sequence — state observed to persist across sessions doesn't need to be rebuilt.
+
+### Loop logging — dual track (neither the hook nor your own memory can carry this alone)
+- Mechanical fields (`iteration`/`ts`) are written automatically by `.claude/hooks/loop-log.sh` (a Stop hook) into `.workflow/logs/run-{{RUN_ID}}/loop.jsonl` — you don't need to write this part.
+- **Before ending each turn, you must append a matching semantic record** to the same `loop.jsonl`:
+  `{"type":"semantic","iteration":<same number as this turn's mechanical record>,"goalVerdict":"continue|success|safety_stop|no_progress_stop|blocked","reason":"...","criteriaMetDelta":[...],"commands":[...],"failures":[...],"blockers":[...],"lesson":"..."}`
+  Don't skip this — it's the only data source for retrospection and template iteration; the hook has no access to your judgment.
+
+### Judge subagent convention
+A judge subagent (verifying anything that needs semantic/visual judgment) must always run with `run_in_background: false`. A backgrounded subagent's return carries only launch metadata, not usage — `token-tally.sh` can't tally its cost, and it would be silently dropped from the token total.
+
+### Lessons
+When a run ends (whichever of success / safety_stop / no_progress_stop / blocked triggered), append an entry to `lessons.md`, routed to the right layer:
+- **Project-specific** → write directly into this file (`CLAUDE.md`)'s convention block.
+- **Domain-generalizable** (useful for other projects in the same domain, e.g. all Capacitor mobile projects) → don't edit the skill package yourself; state in your report which `recipes/<domain>.md` should be added or updated, and what to add.
+- **Universally generalizable** (useful regardless of domain) → state in your report which file under the skill's `templates/` should change, and what to add.
+
+<!-- END auto-man workflow conventions -->

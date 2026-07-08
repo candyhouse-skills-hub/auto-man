@@ -1,0 +1,106 @@
+#!/bin/bash
+# verify.sh — deterministic acceptance check. Exit 0 = pass, non-zero = fail.
+# Contract: always writes $EVIDENCE_PATH as
+#   {"criteria":[{"name","pass","detail"}...], "allPass": bool, "artifacts":[paths...]}
+# allPass is exactly `criteria non-empty AND every criterion passed` — never hand-waved.
+# This script must stay pass/fail-by-script-logic only. No LLM judgment belongs in here;
+# anything that needs visual/semantic judgment (e.g. "does the screenshot look right")
+# is out of scope for this file — capture the artifact here, judge it in a separate
+# visual subagent, and let that subagent's structured verdict feed /goal instead.
+set -uo pipefail
+
+EVIDENCE_PATH="${EVIDENCE_PATH:-.workflow/evidence.json}"
+mkdir -p "$(dirname "$EVIDENCE_PATH")"
+
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+CRITERIA_FILE="$TMP_DIR/criteria.txt"
+ARTIFACTS_FILE="$TMP_DIR/artifacts.txt"
+: > "$CRITERIA_FILE"
+: > "$ARTIFACTS_FILE"
+
+# add_criterion <name> <0|1 pass> <detail>
+add_criterion() { printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$CRITERIA_FILE"; }
+# add_artifact <path>
+add_artifact()  { printf '%s\n' "$1" >> "$ARTIFACTS_FILE"; }
+
+# retry <n> <sleep_s> cmd... : external daemons/tools that a liveness or log
+# check talks to (a simulator control socket, a device bridge, a remote API)
+# have been observed to return transiently empty/truncated output under load.
+# Wrap any check that depends on one of those in retry() before treating a
+# single miss as a real failure.
+retry() {
+  local n="$1" delay="$2"; shift 2
+  local i=0
+  while [ "$i" -lt "$n" ]; do
+    if "$@"; then return 0; fi
+    i=$((i + 1))
+    sleep "$delay"
+  done
+  return 1
+}
+
+# ============================================================================
+# PROJECT-SPECIFIC CHECKS GO HERE. Fill in at instantiation time. If a
+# ${CLAUDE_SKILL_DIR}/recipes/<domain>.md matched this project's domain, seed
+# these checks from its "verify snippets" section instead of starting blank.
+# Every check must end by calling add_criterion.
+#
+# Every criterion needs a command-level, deterministic signal — an exit code,
+# a file's existence, or a count of matching lines. Prefer these general
+# shapes, adapted to the project:
+#
+# Example (artifact exists after a build/generation step):
+#   if [ -f "$BUILD_OUTPUT" ]; then
+#     add_criterion "build_artifact_exists" 1 "$BUILD_OUTPUT present"
+#   else
+#     add_criterion "build_artifact_exists" 0 "$BUILD_OUTPUT missing"
+#   fi
+#
+# Example (process/service alive check via its own health/status command):
+#   if $HEALTHCHECK_CMD >/dev/null 2>&1; then
+#     add_criterion "service_alive" 1 "health check passed"
+#   else
+#     add_criterion "service_alive" 0 "health check failed"
+#   fi
+#
+# Example (no error signatures in a scoped log — MUST scope the log source to
+# this run/process; an unscoped log tail risks matching unrelated noise):
+#   error_count=$(grep -c "FATAL\|ERROR" "$SCOPED_LOG_FILE" || true)
+#   if [ "$error_count" -eq 0 ]; then
+#     add_criterion "no_error_log" 1 "0 error lines in $SCOPED_LOG_FILE"
+#   else
+#     add_criterion "no_error_log" 0 "$error_count error lines in $SCOPED_LOG_FILE"
+#   fi
+# ============================================================================
+
+python3 - "$EVIDENCE_PATH" "$CRITERIA_FILE" "$ARTIFACTS_FILE" <<'PYEOF'
+import json, sys
+
+evidence_path, criteria_file, artifacts_file = sys.argv[1:4]
+
+criteria = []
+with open(criteria_file) as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        name, passed, detail = line.split("|", 2)
+        criteria.append({"name": name, "pass": bool(int(passed)), "detail": detail})
+
+with open(artifacts_file) as f:
+    artifacts = [line.rstrip("\n") for line in f if line.strip()]
+
+all_pass = bool(criteria) and all(c["pass"] for c in criteria)
+data = {"criteria": criteria, "allPass": all_pass, "artifacts": artifacts}
+
+with open(evidence_path, "w") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+
+print(json.dumps(data, ensure_ascii=False))
+PYEOF
+
+python3 -c "
+import json, sys
+sys.exit(0 if json.load(open('$EVIDENCE_PATH')).get('allPass') else 1)
+"

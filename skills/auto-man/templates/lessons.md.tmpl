@@ -1,0 +1,13 @@
+# Lessons — {{PROJECT_NAME}}
+
+> Append one entry per run end (whichever stop signal fired: success / safety_stop / no_progress_stop / blocked) — never overwrite prior entries.
+> Date each entry. Read this file before the next setup; verify any file/command/flag it names still exists before relying on it — this file rots.
+
+## {{DATE}} — run-{{RUN_ID}} (stop reason: {{STOP_REASON}})
+
+- **Manual intervention triggered / unexpected failure**:
+- **Root cause**:
+- **Generalizable?**
+  - Project-specific → already written into this project's `CLAUDE.md` convention block.
+  - Domain-generalizable (useful for other projects in the same domain) → recommend adding/updating `recipes/<domain>.md` in the auto-man skill package (name the file and what to add).
+  - Universally generalizable (useful regardless of domain) → recommend changing a file under the auto-man skill's `templates/` (name the file and what to change). The skill package (`templates/` + `recipes/`) is the only cross-project channel — don't rely on Claude Code's memory system to carry this over, it's bound to the working directory and won't follow.

@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "loop.jsonl entry (.workflow/logs/run-<id>/loop.jsonl)",
+  "description": "Dual-track logging: 'mechanical' entries are written by hooks/loop-log.sh (Stop hook), unconditionally, no model involvement. 'semantic' entries are written by the model itself per CLAUDE.md convention, one per iteration, sharing the same iteration number as its mechanical counterpart. 'run_summary' is appended once at run end by whichever step detects a stop signal.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["type", "iteration", "ts"],
+      "properties": {
+        "type": { "const": "mechanical" },
+        "iteration": { "type": "integer", "minimum": 1 },
+        "ts": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "iteration", "goalVerdict", "reason"],
+      "properties": {
+        "type": { "const": "semantic" },
+        "iteration": { "type": "integer", "minimum": 1 },
+        "goalVerdict": { "type": "string", "enum": ["continue", "success", "safety_stop", "no_progress_stop", "blocked"] },
+        "reason": { "type": "string" },
+        "criteriaMetDelta": { "type": "array", "items": { "type": "string" } },
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "failures": { "type": "array", "items": { "type": "string" } },
+        "blockers": { "type": "array", "items": { "type": "string" } },
+        "lesson": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "stopReason", "totalIterations", "mainSessionTokens", "subagentTokensSum", "totalTokens", "totalCostUsd"],
+      "properties": {
+        "type": { "const": "run_summary" },
+        "stopReason": { "type": "string", "enum": ["success", "safety_stop", "no_progress_stop", "blocked"] },
+        "totalIterations": { "type": "integer", "minimum": 0 },
+        "totalDurationMs": { "type": "integer", "minimum": 0 },
+        "mainSessionTokens": { "type": ["integer", "null"], "minimum": 0, "description": "Sum of usage.{input,output,cache_creation_input,cache_read_input}_tokens from claude -p's --output-format json result. null means the run was NOT invoked with --output-format json — this is a real, expected gap (defaults to plain text with no usage data), not an error to paper over. Never fabricate a number here." },
+        "subagentTokensSum": { "type": "integer", "minimum": 0, "description": "Sum from token-tally.sh over the run's subagent_tokens.count file. 0 is a legitimate value (no subagents called)." },
+        "totalTokens": { "type": ["integer", "null"], "minimum": 0, "description": "mainSessionTokens + subagentTokensSum, or null if mainSessionTokens is null (in which case subagentTokensSum alone is a known lower bound, not the true total)." },
+        "totalCostUsd": { "type": ["number", "null"], "minimum": 0, "description": "Rough order-of-magnitude estimate only: totalTokens * APPROX_USD_PER_TOKEN (see hooks/loop-log.sh or the skill's run_summary step for the current constant, default 0.000003 = $3/million tokens as of writing). Deliberately does NOT distinguish input/output/cache-write/cache-read pricing tiers, which differ by roughly 10x on Claude — this is for a quick 'is this in the right ballpark' check, not for billing or precise budget tracking. Use total_cost_usd from claude -p's --output-format json result instead when exactness matters. null if totalTokens is null (can't estimate without a token count)." },
+        "criteriaMet": { "type": "array", "items": { "type": "string" } },
+        "criteriaPending": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

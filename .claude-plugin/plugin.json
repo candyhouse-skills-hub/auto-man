@@ -1,0 +1,9 @@
+{
+  "name": "auto-man",
+  "description": "Zero-human-intervention delivery loop for tasks with machine-checkable success criteria: instantiate deterministic verify + hooks + /goal condition into an isolated workspace, run supervised then hands-off, verify with evidence not self-report.",
+  "version": "0.1.0",
+  "author": {
+    "name": "arkey"
+  },
+  "license": "MIT"
+}
