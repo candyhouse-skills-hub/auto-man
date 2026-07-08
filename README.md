@@ -29,6 +29,22 @@ A zero-human-intervention delivery loop for tasks with machine-checkable success
 /plugin install auto-man@<marketplace name>
 ```
 
+## Usage
+
+```
+/auto-man [target-path] [task or plan]
+```
+
+- `target-path` — where to isolate the work (existing repo, new directory, etc.)
+- `task or plan` — a one-line task, a pasted detailed plan, or a path to a plan file (e.g. "read ./docs/plan.md as the plan")
+
+```
+/auto-man ./my-api unify all REST error responses to { code, message, data }
+/auto-man ./my-api read ./docs/plan.md as the plan
+```
+
+Note: this skill only runs when explicitly invoked with `/auto-man` — it's never triggered automatically.
+
 ## Quick Start
 
 1. **Use `auto` (or `acceptEdits`) permission mode** — default mode prompts on every tool call, defeating the point. Launch with `claude --permission-mode auto`, or switch mid-session.
