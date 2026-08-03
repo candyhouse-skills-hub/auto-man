@@ -12,6 +12,16 @@ Refuse to proceed (ask the user instead) if any of these are missing:
 - **A location that can be isolated.** See Step 1 — this doesn't have to be an existing git repo; if the starting point is genuinely ambiguous (no path given, unclear whether to create new or modify existing), ask the user rather than guessing.
 - **The session's permission mode is `auto` (or `acceptEdits` as a documented fallback), not the default manual mode.** This skill's instructions cannot change your permission mode for you — that's a session-level setting, and a skill silently escalating it would be a real security problem. Both Step 3 and Step 4 are designed to run under the *same* permission mode; what distinguishes "supervised" from "hands-off" is whether `/goal` is active, not whether every tool call stops to ask. If you notice tool calls being prompted for confirmation one by one, or you have no way to confirm `auto` mode is active, stop and tell the user directly: they need to relaunch with `claude --permission-mode auto`, or switch modes mid-session, before you continue. Don't push through Step 3 treating per-call prompts as an acceptable substitute for the intended per-turn checkpoint.
 
+## Where this skill lives (read before Step 6 ever edits anything)
+
+This skill is typically installed as a git-based marketplace plugin: `${CLAUDE_SKILL_DIR}` resolves to a path under `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/...` — a shallow git clone pinned at whatever commit was current at last install/update, at a version-numbered path that generally does **not** change between updates (e.g. `0.1.0` stays `0.1.0` until someone bumps it). Any edit made only there is invisible outside this one machine, and **is silently discarded the next time `/plugin update` (or a reinstall) runs**, since that re-fetches into the exact same directory. This has already happened once in practice: four real fixes accumulated as uncommitted local modifications in a cache directory, none reached the actual source repo, and one of them (a template bug) was still shipping to every fresh install weeks later.
+
+Step 6 ("Close the loop") must write into this skill's **source repository** — the git repo this plugin is actually built and published from — never the cache path. Find it, in order: (a) a path the user has already told you about; (b) `git -C "${CLAUDE_SKILL_DIR}" remote -v` — if it points at a real, non-empty, pushable origin and `git status`/`git log` there look like a normal working repo, treat that as the source and work directly in it (a shallow clone pinned to one old commit, or a repo with no remote, is a sign you're still looking at the cache, not the source); (c) ask the user directly where the source repo lives.
+
+**Hard rule: if you cannot find or confirm an actual source repo, do not write anything under `${CLAUDE_SKILL_DIR}` in Step 6.** Stop and report the recommended changes to the user as a proposal instead — see the automation boundary in Step 6 below. A cache-only edit is worse than no edit: it creates the appearance of durability while being one `/plugin update` away from silent deletion.
+
+The publish chain, once you're in the real source: commit → push to its remote → bump the version field in `.claude-plugin/plugin.json` (this is what makes a subsequent `/plugin update` actually pull fresh content into a *new* cache directory, rather than a no-op against the same pinned path) → tell the user to run `/plugin update` (or reinstall) to refresh their local cache. You cannot run `/plugin update` yourself — it's a user-facing command, not a tool call — so this last step is always a handoff.
+
 ## Step 0 — Establish the plan you work from
 
 The hands-off phase (Step 4) runs unattended across many turns in `auto` mode — the single biggest lever against it drifting is a precise spec fixed *before* it starts. So the input you actually execute from is always a detailed plan: the task, its machine-checkable acceptance criteria, the scope boundaries, and any known-unfixable exemptions. Everything Step 2 fills into `verify.sh` and `goal-condition.txt` comes from here.
@@ -41,6 +51,8 @@ Pick the mechanism from the target's actual starting shape — don't default to 
 
 Whatever mechanism is chosen, the isolated location must end up with `.claude/settings.json` in place and be the nested session's cwd — otherwise the hooks in Step 2 silently never fire.
 
+**Decide the delivery path now, not after the work is done.** The isolated location (a worktree, a scratch clone) is a discardable *verification site*, not the deliverable itself — a passing `verify.sh` there proves the fix works, it doesn't get it in front of the user. Before Step 3 starts, settle how the result will actually land: cherry-pick the finished commit(s) onto the real branch, merge the branch, open a PR, or (for a non-git target) copy the changed files back — and say so in your plan. A worktree left on an unmerged branch with nobody told to merge it is a run that quietly delivered nothing.
+
 ## Step 2 — Instantiate templates
 
 Copy everything from `${CLAUDE_SKILL_DIR}/templates/` into the isolated workspace:
@@ -64,7 +76,11 @@ Fill every `{{PLACEHOLDER}}` in `.workflow/verify.sh` (project-specific pass/fai
 
 **Writing `verify.sh` checks from first principles (no matching recipe):** every criterion needs a command-level deterministic signal — an exit code, a file's existence, a count of matching lines in a properly-scoped log. Wrap anything that talks to a flaky external daemon in the provided `retry()` helper. Never put LLM judgment inside `verify.sh` itself — that's the judge subagent's job (see the `{{JUDGE_CLAUSE}}` note above), and only when the task actually needs it.
 
+**Prefer a behavioral check over a structural one whenever the project has the test infrastructure for it.** A criterion like "does this identifier appear ≥3 times in this file" (a structural grep) only proves a *shape* exists — a session could satisfy it without the feature actually working. When the project already has a test runner, a criterion that actually exercises the behavior (a unit/integration test asserting the real outcome) is strictly stronger and should be preferred. Structural/grep checks are a reasonable fallback when there's no test infrastructure to hook into (and are far better than no check at all) — just don't reach for them by default when a real behavioral assertion is available.
+
 Seed `.workflow/state.json` from `state.schema.json` with `iteration: 0` and the acceptance criteria names in `criteriaPending`.
+
+**Bootstrap the workspace and run a baseline check before writing any implementation code.** An isolated workspace (a fresh worktree, a fresh clone) usually does not have installed dependencies (`node_modules/`, a Python venv, etc. are normally gitignored) — running `verify.sh` against a dependency-less workspace fails with a misleading error (e.g. "eslint: command not found") that looks like a code problem but is actually an environment problem. Install whatever the project's package manager needs (`npm i` / `pip install -r requirements.txt` / etc.) first, then run `.workflow/verify.sh` **once, before any implementation work**, and read *why* it fails. Confirm it fails for the right reason — the feature genuinely doesn't exist yet — not a wrong reason (a missing tool, a broken import, a criterion that would trivially pass on unmodified code). This is the only way to know your criteria can actually detect absence before you rely on them to detect presence.
 
 ## Step 3 — Supervised first pass (no `/goal`)
 
@@ -80,6 +96,8 @@ Only after step 3 is clean, test whether the loop can run with zero intervention
 
 **Determine `MAX_TURNS` first — from real data, not a guess.** Step 3 just ran; you know how many turns/iterations the supervised pass actually took to reach a clean state. Set `MAX_TURNS ≈ that count × 2.5–3`. Don't reuse a number from a different project's run — turn counts aren't portable across tasks.
 
+Bias the multiplier upward (toward 3, or higher) whenever Step 3's supervised pass benefited from context the fresh nested session won't have — e.g. you had already explored/read the relevant files earlier in the same conversation, or you already knew the exact plan/file/line targets before Step 3 started. The nested session in Step 4 starts stone cold: it has to rediscover the codebase, re-derive the same plan, make the edits, *and* run verify.sh itself, all inside `MAX_TURNS`. A run observed in practice: a 3-file, ~40-line diff supervised pass that took a handful of turns (with pre-existing exploration context) still needed all of a `turns×3`-derived `MAX_TURNS=15` budget for the fresh session, and hit the cap having *already produced a fully passing diff* — it simply hadn't gotten to declaring success yet. When in doubt, round up rather than down; a wasted turn budget is far cheaper than a false "safety stop" on a task that actually succeeded. **Better than either guess: if `~/.claude/auto-man/ledger.jsonl` has 3+ prior rows with a comparable `taskShape` (similar `filesTouched`/`diffLoc`, same `hasTestInfra`), set `MAX_TURNS = max(turnsUsed among successful comparable rows) × 1.5` instead of guessing from this run's `supervisedTurns` alone — see the ledger described in Step 6.**
+
 **Determine `BUDGET_USD` — this is the user's call, not yours to guess.** Check in this priority order:
 1. Did the user's task description or plan (if one exists) explicitly state a budget? Use it.
 2. If not, **ask the user directly** before running anything: "this hands-off run needs a hard dollar cap — what's your limit?" If prior runs on this same project have a `total_cost_usd` in `loop.jsonl`, mention it as context ("a similar run cost about $X last time"), but don't pick the number for them.
@@ -87,7 +105,12 @@ Only after step 3 is clean, test whether the loop can run with zero intervention
 
 ```bash
 cd <isolated workspace>
-export LOOP_RUN_ID="run-$(date +%Y%m%d-%H%M%S)"
+# NOTE: no "run-" prefix here — both loop-log.sh and token-tally.sh already
+# prepend "run-" to this value when building their log directory path
+# (`.workflow/logs/run-${LOOP_RUN_ID:-default}`). Including it here too
+# produces a doubled `run-run-20260101-...` directory name (observed in
+# practice, harmless but confusing to cross-reference by hand).
+export LOOP_RUN_ID="$(date +%Y%m%d-%H%M%S)"
 env LOOP_RUN_ID="$LOOP_RUN_ID" claude \
   --permission-mode auto \
   --max-turns "$MAX_TURNS" \
@@ -108,16 +131,67 @@ After the run, check the mechanical files directly — do not accept the session
 ```bash
 cat .workflow/logs/run-$LOOP_RUN_ID/loop.jsonl        # mechanical + semantic entries should both be present
 cat .workflow/logs/run-$LOOP_RUN_ID/subagent_tokens.count   # should exist if any subagent ran synchronously
+cat .workflow/logs/run-$LOOP_RUN_ID/guard_invocations.count # should exist and be >0 if any Bash tool call happened at all
 ```
+
+`guard_invocations.count` existing and being roughly in the ballpark of how many Bash calls you'd expect is your only signal that the security denylist was actually in the loop at all — unlike the other two hooks, `guard.sh` previously wrote nothing on any path, so its silent non-firing was completely undetectable. If it's missing despite Bash calls having clearly happened, treat that the same as any other hook-silence finding below: don't assume commands were screened.
 
 If `subagent_tokens.count` is missing despite subagents having run, or the JSON output's `usage` fields don't reconcile with what the session claimed, that's a real bug in the hook chain, not a fluke — debug it the same way this skill's own templates were debugged: temporarily tee the hook's raw stdin to a file and inspect the actual payload shape rather than assuming.
 
-Append an honest `run_summary` entry to `loop.jsonl`: `mainSessionTokens` from the `--output-format json` result's `usage` fields (sum of `input_tokens` + `output_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`), `subagentTokensSum` from summing `subagent_tokens.count`, `totalTokens` as their sum. If either is genuinely unavailable, write `null` for it and let `totalTokens` be `null` too — never fabricate a number to satisfy the schema.
+**Known behavior, confirmed by comparing multiple runs' `loop.jsonl` mechanical-entry counts against their `terminal_reason`**: in `-p`/`--output-format json` mode, the Stop hook (`loop-log.sh`) fires **at most once per invocation — at the very end, only if the session reaches a natural stop.** When `--max-turns` (or `--max-budget-usd`) forcibly truncates the run before that (`terminal_reason: max_turns`), the Stop hook does not fire at all, so `.workflow/logs/run-$LOOP_RUN_ID/` may never even get created — despite the session having made real file edits and `verify.sh` passing when run by hand afterward. (Cross-run data: a `-p` run that reached `terminal_reason: success` logged exactly 1 mechanical entry; a `-p` run that hit `terminal_reason: max_turns` logged 0; interactive sessions logged one mechanical entry per visible turn, e.g. 12 and 3 in two other runs — confirming `-p` mode's "one turn" from the Stop hook's perspective is the *entire invocation*, not each internal agentic-loop iteration.) **Do not treat an empty/missing `loop.jsonl` after a `-p` mode run as proof the run did nothing** — it is only proof the run didn't reach a natural stop within its turn/budget cap; check `git status`/`git diff` in the isolated workspace and rerun `verify.sh` directly before concluding the task made no progress. Treat Step 5's hook-log checks as corroborating evidence when the run *succeeded*, not as a requirement when it was truncated — always cross-check with `verify.sh`'s own evidence.json regardless of `terminal_reason`.
 
-Also write `totalCostUsd` — a deliberately rough estimate, `totalTokens * 0.000003` ($3/million tokens, one blended rate, not split by input/output/cache tier). This is for an at-a-glance sanity check ("does this look like the right order of magnitude"), not a real cost figure — when `--output-format json` was used, its `total_cost_usd` is the accurate number and should be quoted to the user directly instead of this estimate. `totalCostUsd` is `null` whenever `totalTokens` is `null`, for the same reason: don't estimate from a number that isn't there.
+Append an honest `run_summary` entry to `loop.jsonl`, using exactly the field names in `${CLAUDE_SKILL_DIR}/templates/loop-entry.schema.json` (copied into `.workflow/loop-entry.schema.json` at Step 2) — this schema was revised after real runs invented ad-hoc, inconsistent names for the same fields (see below), so treat it as authoritative rather than improvising your own: `mainSessionTokens` from the `--output-format json` result's `usage` fields (sum of `input_tokens` + `output_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`), `subagentTokensSum` from summing `subagent_tokens.count`, `totalTokens` as their sum. If either is genuinely unavailable, write `null` for it and let `totalTokens` be `null` too — never fabricate a number to satisfy the schema. Also record `terminalReason`/`numTurns`/`isError`/`subtype` straight from the CLI result, `stopReason` only if a semantic entry actually declared one (`null` otherwise — do not put the CLI's own low-level `stop_reason`, e.g. `"tool_use"`, in this field; that goes in `cliStopReason`), and `hooksFired` (whether `loop-log.sh`/`token-tally.sh` produced any output at all for this run).
+
+Before moving on, validate the appended line against the schema — a quick stdlib check is enough, no external `jsonschema` package needed:
+```bash
+python3 -c "
+import json
+schema = json.load(open('.workflow/loop-entry.schema.json'))
+run_summary_schema = next(s for s in schema['oneOf'] if s['properties']['type'].get('const') == 'run_summary')
+required = run_summary_schema['required']
+allowed = set(run_summary_schema['properties'].keys())
+with open('.workflow/logs/run-\$LOOP_RUN_ID/loop.jsonl') as f:
+    lines = [json.loads(l) for l in f if l.strip()]
+row = next(r for r in reversed(lines) if r.get('type') == 'run_summary')
+missing = [k for k in required if k not in row]
+extra = set(row.keys()) - allowed
+assert not missing, f'missing required fields: {missing}'
+assert not extra, f'fields not in schema (typo, or a new ad-hoc name that needs adding to the schema instead): {extra}'
+print('run_summary line matches schema')
+"
+```
+If this fails because you invented a field name the schema doesn't have, that's a sign to add it to `loop-entry.schema.json` in Step 6 (proposal-only, see below) rather than just letting the drift continue silently — this exact drift (three different names for the same cost figure across three separate runs) is what made the schema unusable for anything downstream until now.
+
+**`cliTotalCostUsd` (the `--output-format json` result's own `total_cost_usd`) is authoritative — quote that to the user, always, whenever it's available.** Only fall back to estimating `totalCostUsd` yourself when no CLI cost figure exists at all (e.g. a `--bg` run, or a hook-only trace with no final JSON result).
+
+If you must estimate: **do not use one flat blended rate** — `totalTokens * 0.000003` was tried in practice and came out 4.6× too high ($3.44 estimated vs $0.74 actual CLI-reported cost) on a `/goal` loop run, because the loop is inherently cache-read-heavy (94% of that run's tokens were `cache_read_input_tokens`, which price at roughly a tenth of a normal input token) and a single blended rate assumes a much more even input/output/cache mix than these loops actually have. Instead, weight `cache_read_input_tokens` far lower than `input_tokens`/`output_tokens`/`cache_creation_input_tokens` in whatever rough formula you use, and label the result clearly as a rough estimate, not a real figure. `totalCostUsd` (whether estimated or absent) is `null` whenever `totalTokens` is `null` — don't estimate from a number that isn't there.
+
+Finally, append this run's row to `~/.claude/auto-man/ledger.jsonl` (see Step 6 — this is the mechanical, no-approval-needed part of closing the loop, and it's the only place this run's data survives past the isolated workspace being deleted).
 
 ## Step 6 — Close the loop
 
-Fold every lesson from `.workflow/lessons.md` that's genuinely generalizable into the skill package right now, not as a deferred TODO. Route by the same three-tier test used throughout this skill: **useful to other domains too? → `templates/`. useful only within this task's domain? → `recipes/<domain>.md`. useful only to this one project? → it already lives in the project's own `CLAUDE.md`, nothing to fold back.**
+**First, execute the delivery path you decided in Step 1** (cherry-pick, merge, PR, or copy files back) — a passing `verify.sh` in the isolated workspace is proof the fix works, not proof the user has it. Don't leave the result stranded on an unmerged worktree branch; if the delivery step genuinely needs the user's review before landing (e.g. a PR), say so explicitly in your report rather than silently treating "verify.sh passed in the worktree" as equivalent to "done."
+
+Two different kinds of output come out of this step, with two different automation levels — never conflate them. This split exists because this skill is distributed via a marketplace plugin: an auto-committed prose/template change would reach every future installer without review, whereas a structured data row in your own local ledger carries no such risk.
+
+**Mechanical — do this automatically, every run, no approval needed:**
+1. Append a row to `~/.claude/auto-man/ledger.jsonl` (first run on this machine: create it, and copy `${CLAUDE_SKILL_DIR}/templates/ledger.schema.json` to `~/.claude/auto-man/ledger.schema.json` alongside it). Fields: `date`, `project`, `taskShape` (`filesTouched`, `diffLoc`, `hasTestInfra`), `supervisedTurns`, `maxTurnsSet`, `turnsUsed`, `terminalReason`, `allPassVerifiedByOrchestrator` (did *you* rerun verify.sh, or only cite a prior evidence.json), `hooksFired`, `costUsd` (+ its token breakdown), `criteriaShapes` (counts of grep/exit-code/file-exists-style checks), `outcome` — whose enum **must** include `success_undeclared` (verify.sh passed but the session never got to declare it, e.g. hit `max_turns` first) as a distinct value from plain `failure`, or a run exactly like that gets misfiled as a failure and skews every future decision that reads this ledger. Validate the row against the schema before writing — a malformed entry is worse than no entry, since Step 4's `MAX_TURNS` derivation and Step 7's retro both depend on this file staying parseable.
+2. If you are about to modify anything under `templates/` or `recipes/` in this step, run `${CLAUDE_SKILL_DIR}/selftest.sh` first and make sure it still passes with your change applied — it exists specifically to catch template/recipe bugs (malformed artifact paths, missing recipe sections, a schema no real data actually matches) before they ship to the next install.
+
+**Proposal-only — never auto-commit:**
+1. Draft the actual `templates/`/`recipes/`/`SKILL.md` diff for anything from `.workflow/lessons.md` that's genuinely generalizable, using the same three-tier test used throughout this skill: **useful to other domains too? → `templates/`. useful only within this task's domain? → `recipes/<domain>.md`. useful only to this one project? → it already lives in the project's own `CLAUDE.md`, nothing to fold back.**
+2. Tag every folded-back line with its provenance so it can be reviewed or retired later: `<!-- lesson: <date> run-<id> <project> · last-verified <date> -->` immediately above the added prose (or a trailing inline comment for a one-line shell/config change). Undated, unattributed prose is exactly what made the current templates/recipes impossible to audit or expire.
+3. Before proposing something that **contradicts** an existing line in `templates/`/`recipes/`, resolve it — correct or remove the stale claim — rather than appending a second, conflicting statement next to it. Two rounds of "confirmed still valid" / "actually this changed" living side by side is a bug, not documentation.
+4. Present the diff to the user and only write it into the skill's **source repo** after they approve (see "Where this skill lives" above — never the cache). If you cannot identify a source repo, stop and hand over the proposal text instead of writing anything.
 
 Report to the user: what passed, what got fixed along the way, the actual evidence (`evidence.json` + the judge subagent's structured verdict, if this task used one) — not a narrative summary standing in for it — and the run's cost: quote `run_summary`'s `totalTokens` (`mainSessionTokens + subagentTokensSum`) and either the accurate `total_cost_usd` from the `--output-format json` result or, if unavailable, the rough `totalCostUsd` estimate (labeled as an estimate). Don't drop the subagent portion — it's the part `/goal`'s own numbers miss.
+
+## Step 7 — Retro (optional, standalone entry point)
+
+Run this on its own — not tied to any specific delivery task — when the user asks something like "what have we learned from auto-man runs" or "improve the skill from experience," as opposed to Step 6, which only folds back lessons from *this* run.
+
+1. Read `~/.claude/auto-man/ledger.jsonl` in full, plus every `.workflow/lessons.md` you can still find on disk (check any isolated workspaces/worktrees the user still has lying around — they're the only place a lesson's full narrative survives; the ledger only has the structured summary, by design, since it's meant to stay small and mechanically parseable).
+2. Compute retention: for each lesson that claimed "universally generalizable" or "domain-generalizable" in some `lessons.md`, grep whether it actually landed in the current `templates/`/`recipes/` in the source repo — report the ratio. A low ratio is itself a finding worth surfacing, not just a means to an end.
+3. Run `${CLAUDE_SKILL_DIR}/selftest.sh` to catch any template/recipe bug that's shipping right now, independent of any specific lesson.
+4. For any provenance-tagged line whose `last-verified` date is more than ~90 days old (or whatever staleness window the user prefers), re-check that the file/command/flag/behavior it names still exists/holds before treating it as still valid in your proposal — if it doesn't, propose removing or correcting that line instead of leaving it. `templates/lessons.md.tmpl`'s own warning ("this file rots") applies just as much to what's already landed in `templates/`/`recipes/`, not only to the per-project copy.
+5. Produce one consolidated proposal (diff form) covering everything found — same proposal-only rule as Step 6: present it, don't commit without the user's review.

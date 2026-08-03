@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "auto-man cross-run ledger entry (~/.claude/auto-man/ledger.jsonl)",
+  "description": "One line per completed run, across ALL projects on this machine — the only store that survives an isolated workspace/worktree being deleted. Unlike .workflow/state.json (in-run only) or .workflow/lessons.md (per-project, deleted with the workspace), this file is meant to accumulate indefinitely and be read back by Step 4 (MAX_TURNS derivation) and Step 7 (retro). Append-only: never rewrite a prior line.",
+  "type": "object",
+  "required": [
+    "date",
+    "project",
+    "taskShape",
+    "terminalReason",
+    "allPassVerifiedByOrchestrator",
+    "hooksFired",
+    "outcome"
+  ],
+  "properties": {
+    "date": { "type": "string", "format": "date", "description": "YYYY-MM-DD the run completed" },
+    "project": { "type": "string", "description": "Project name or path, for grouping/filtering" },
+    "taskShape": {
+      "type": "object",
+      "description": "Cheap, comparable descriptors of what kind of task this was — used to decide whether another run's turnsUsed is a fair comparison for MAX_TURNS derivation",
+      "required": ["filesTouched", "diffLoc", "hasTestInfra"],
+      "properties": {
+        "filesTouched": { "type": "integer", "minimum": 0 },
+        "diffLoc": { "type": "integer", "minimum": 0, "description": "Total lines added+removed across the final diff" },
+        "hasTestInfra": { "type": "boolean", "description": "Did the project already have a test runner/framework the task could use, or did verify.sh have to rely on tsc/lint/grep-only checks" }
+      }
+    },
+    "supervisedTurns": { "type": ["integer", "null"], "minimum": 0, "description": "Turns the Step 3 supervised pass took to reach a clean verify.sh" },
+    "maxTurnsSet": { "type": ["integer", "null"], "minimum": 0, "description": "The --max-turns value chosen for the Step 4 hands-off run" },
+    "turnsUsed": { "type": ["integer", "null"], "minimum": 0, "description": "num_turns actually reported by the --output-format json result" },
+    "terminalReason": { "type": ["string", "null"], "description": "The CLI's own terminal_reason (e.g. success, max_turns, tool_use) — not the /goal stopReason enum, which is a separate semantic signal" },
+    "allPassVerifiedByOrchestrator": { "type": "boolean", "description": "Did the orchestrator (you) actually rerun verify.sh and see allPass:true, vs only trusting the nested session's self-report or a possibly-stale evidence.json" },
+    "hooksFired": { "type": ["boolean", "null"], "description": "Did loop-log.sh/token-tally.sh produce any output for this run at all; null if not checked" },
+    "costUsd": { "type": ["number", "null"], "description": "The authoritative total_cost_usd from --output-format json when available; a labeled rough estimate otherwise; null if neither exists" },
+    "costTokens": {
+      "type": ["object", "null"],
+      "properties": {
+        "mainSessionTokens": { "type": ["integer", "null"] },
+        "subagentTokensSum": { "type": ["integer", "null"] },
+        "totalTokens": { "type": ["integer", "null"] }
+      }
+    },
+    "criteriaShapes": {
+      "type": ["object", "null"],
+      "description": "Rough counts of how verify.sh's criteria were implemented, to track the structural-grep-vs-behavioral-check balance over time",
+      "properties": {
+        "grepCount": { "type": "integer", "minimum": 0 },
+        "exitCodeCount": { "type": "integer", "minimum": 0 },
+        "fileExistsCount": { "type": "integer", "minimum": 0 },
+        "otherCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "success_undeclared", "failure", "no_progress_stop", "blocked", "safety_stop"],
+      "description": "success_undeclared MUST be used (not 'failure') when verify.sh independently shows allPass:true but the session never reached the point of declaring the goal condition satisfied (e.g. it hit max_turns first) — conflating this with a real failure corrupts every future MAX_TURNS/retro read of this ledger."
+    },
+    "notes": { "type": "string", "description": "Free-text one-liner: what the task was, anything surprising" }
+  }
+}

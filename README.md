@@ -55,5 +55,9 @@ Note: this skill only runs when explicitly invoked with `/auto-man` — it's nev
 
 ## Learn More
 
-- [`skills/auto-man/SKILL.md`](./skills/auto-man/SKILL.md) — the full step-by-step: establish the plan → isolate → instantiate (matching a recipe if one applies) → supervised pass → hands-off run → verify the hooks fired → fold lessons back in.
+- [`skills/auto-man/SKILL.md`](./skills/auto-man/SKILL.md) — the full step-by-step: establish the plan → isolate → instantiate (matching a recipe if one applies) → supervised pass → hands-off run → verify the hooks fired → fold lessons back in → optional standalone retro.
 - [`skills/auto-man/recipes/README.md`](./skills/auto-man/recipes/README.md) — the domain-recipe layer, and how to add one.
+
+## For skill maintainers: where improvements must land
+
+This repo (not the plugin cache) is the only durable home for anything this skill learns. When a run's Step 6/7 proposes folding a lesson back in, that diff must land **here**, get committed, and get pushed — an edit made only inside `~/.claude/plugins/cache/.../auto-man/<version>/` is invisible to every other install and gets silently overwritten by the next `/plugin update`, since that command re-fetches into the same version-pinned path. After merging a change, bump `.claude-plugin/plugin.json`'s `version` so `/plugin update` actually pulls it (a same-version update is a no-op against the identical path). See `SKILL.md`'s "Where this skill lives" section for the full rule, and run `skills/auto-man/selftest.sh` before merging any `templates/`/`recipes/` change.

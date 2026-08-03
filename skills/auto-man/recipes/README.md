@@ -11,6 +11,7 @@ See `SKILL.md` Step 2 for how a recipe gets matched and applied, and Step 5/6 fo
 ## Available recipes
 
 - `capacitor-ios-android-launch.md` — web app wrapped with Capacitor, launched on iOS/Android simulators/emulators.
+- `electron-desktop-wrap.md` — web app packaged as a desktop app via Electron + electron-builder.
 
 ## Adding a new recipe
 

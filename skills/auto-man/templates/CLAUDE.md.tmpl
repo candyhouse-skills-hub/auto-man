@@ -17,6 +17,8 @@ If a domain recipe under `${CLAUDE_SKILL_DIR}/recipes/` matched this project, it
 ### Long-running commands
 Any command expected to run longer than 30s: launch it in the background and poll/wait for completion — don't block the foreground burning turns on an empty wait.
 
+When your harness's Bash tool has a native `run_in_background` option, pass the long-running command to it directly — do not additionally wrap it in your own `nohup ... & disown`, or the tool will report completion as soon as the wrapper shell forks and disowns the child, not when the real command finishes (this produces false-positive "completed" notifications while the actual build/install is still running). Reserve manual `nohup`/`disown`/backgrounding for genuinely long-lived daemons (an emulator, a dev server) that are never expected to exit on their own — for one-shot build/install/test commands with a real completion point, let the tool's own backgrounding track completion.
+
 ### New-session startup check (look at current state before redoing work)
 When a new `/goal` session starts (especially repeated runs in the hands-off phase), check whether the target process/service/artifact from a prior run is already up before redoing setup work. If it's already running, go straight to re-collecting evidence (rerun `verify.sh` + the judge subagent if one applies) instead of defaulting to re-running the entire install/build/launch sequence — state observed to persist across sessions doesn't need to be rebuilt.
 
@@ -32,7 +34,9 @@ A judge subagent (verifying anything that needs semantic/visual judgment) must a
 ### Lessons
 When a run ends (whichever of success / safety_stop / no_progress_stop / blocked triggered), append an entry to `lessons.md`, routed to the right layer:
 - **Project-specific** → write directly into this file (`CLAUDE.md`)'s convention block.
-- **Domain-generalizable** (useful for other projects in the same domain, e.g. all Capacitor mobile projects) → don't edit the skill package yourself; state in your report which `recipes/<domain>.md` should be added or updated, and what to add.
-- **Universally generalizable** (useful regardless of domain) → state in your report which file under the skill's `templates/` should change, and what to add.
+- **Domain-generalizable** (useful for other projects in the same domain, e.g. all Capacitor mobile projects) → name which `recipes/<domain>.md` should be added or updated, and what to add.
+- **Universally generalizable** (useful regardless of domain) → name which file under the skill's `templates/` should change, and what to add.
+
+This session (running inside the isolated workspace, whether it's the supervised pass or a Step 4 hands-off nested session) records the lesson and its routing — it does not itself decide *whether* to write it into the skill package, and it never writes to `${CLAUDE_SKILL_DIR}` directly. That decision (and the actual edit, gated by user approval for anything beyond the mechanical ledger append) happens one level up, in the orchestrating session's Step 6/7 — see SKILL.md's "Where this skill lives" section and Step 6's mechanical-vs-proposal split for exactly what does and doesn't require sign-off.
 
 <!-- END auto-man workflow conventions -->

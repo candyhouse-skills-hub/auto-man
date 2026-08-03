@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "loop.jsonl entry (.workflow/logs/run-<id>/loop.jsonl)",
-  "description": "Dual-track logging: 'mechanical' entries are written by hooks/loop-log.sh (Stop hook), unconditionally, no model involvement. 'semantic' entries are written by the model itself per CLAUDE.md convention, one per iteration, sharing the same iteration number as its mechanical counterpart. 'run_summary' is appended once at run end by whichever step detects a stop signal.",
+  "description": "Dual-track logging: 'mechanical' entries are written by hooks/loop-log.sh (Stop hook), unconditionally, no model involvement — EXCEPT in `-p`/`--output-format json` mode, where the Stop hook fires at most once per invocation, only if the run reaches a natural stop; a run truncated by --max-turns/--max-budget-usd can legitimately produce ZERO mechanical entries (see SKILL.md Step 5). 'semantic' entries are written by the model itself per CLAUDE.md convention, one per iteration, sharing the same iteration number as its mechanical counterpart — also absent if the run never reaches a turn boundary. 'run_summary' is appended once at run end by whichever step detects a stop signal (typically the orchestrating session, not the nested one, since the nested one may never get to write anything). This schema was revised after real run_summary lines in the wild used at least 3 different ad-hoc names for the same authoritative-cost field (accurateTotalCostUsd / actualTotalCostUsdFromCli / accurateTotalCostUsdFromCli) and conflated the CLI SDK's low-level stop_reason with the /goal semantic stopReason — see cliTotalCostUsd and cliStopReason below for the now-canonical names.",
   "oneOf": [
     {
       "type": "object",
@@ -31,18 +31,31 @@
     },
     {
       "type": "object",
-      "required": ["type", "stopReason", "totalIterations", "mainSessionTokens", "subagentTokensSum", "totalTokens", "totalCostUsd"],
+      "required": ["type", "mainSessionTokens", "subagentTokensSum", "totalTokens", "totalCostUsd"],
       "properties": {
         "type": { "const": "run_summary" },
-        "stopReason": { "type": "string", "enum": ["success", "safety_stop", "no_progress_stop", "blocked"] },
-        "totalIterations": { "type": "integer", "minimum": 0 },
-        "totalDurationMs": { "type": "integer", "minimum": 0 },
+        "runId": { "type": ["string", "null"], "description": "The LOOP_RUN_ID value used for this run's log directory (without the 'run-' prefix hooks add — see SKILL.md Step 4's note on the double-prefix pitfall)." },
+        "stopReason": {
+          "type": ["string", "null"],
+          "enum": ["success", "safety_stop", "no_progress_stop", "blocked", null],
+          "description": "The /goal semantic verdict, ONLY when the nested session actually reached a declared stop and logged one. null (not a made-up value) when the run was truncated before declaring anything — e.g. terminalReason is max_turns and no semantic entry exists. Do NOT put the CLI SDK's raw stop_reason (e.g. 'tool_use', from the API's own turn-ending signal, unrelated to /goal) in this field — that goes in cliStopReason below; a real run_summary line was observed doing exactly this by mistake."
+        },
+        "terminalReason": { "type": ["string", "null"], "description": "The claude -p --output-format json result's own top-level terminal_reason field, verbatim (e.g. 'success', 'max_turns'). Distinct from stopReason above (the /goal-level semantic verdict) and from cliStopReason below (the API turn-level signal) — all three answer different questions and have been conflated in practice." },
+        "cliStopReason": { "type": ["string", "null"], "description": "The CLI result's raw stop_reason field (e.g. 'tool_use', 'end_turn') — a low-level API concept describing why the model's last turn ended, not why the whole run ended. Keep separate from stopReason." },
+        "numTurns": { "type": ["integer", "null"], "minimum": 0, "description": "The CLI result's own num_turns count. May legitimately differ from totalIterations (the mechanical loop-log.sh Stop-hook entry count) in -p mode, since that hook fires at most once per invocation regardless of how many internal turns the CLI took — do not assume these two counts should match." },
+        "totalIterations": { "type": ["integer", "null"], "minimum": 0, "description": "Count of mechanical entries this run's loop-log.sh Stop hook actually wrote. 0 or null is a real, meaningful signal in -p mode (see SKILL.md Step 5's 'known behavior' note) — not automatically evidence of a broken hook." },
+        "isError": { "type": ["boolean", "null"], "description": "The CLI result's own is_error field." },
+        "subtype": { "type": ["string", "null"], "description": "The CLI result's own subtype field, e.g. 'success', 'error_max_turns'." },
+        "hooksFired": { "type": ["boolean", "null"], "description": "Did this run's hooks (loop-log.sh/token-tally.sh) produce any output at all for this run directory. Mirrors the same field recorded in ~/.claude/auto-man/ledger.jsonl — keep them consistent for the same run." },
+        "totalDurationMs": { "type": ["integer", "null"], "minimum": 0 },
         "mainSessionTokens": { "type": ["integer", "null"], "minimum": 0, "description": "Sum of usage.{input,output,cache_creation_input,cache_read_input}_tokens from claude -p's --output-format json result. null means the run was NOT invoked with --output-format json — this is a real, expected gap (defaults to plain text with no usage data), not an error to paper over. Never fabricate a number here." },
-        "subagentTokensSum": { "type": "integer", "minimum": 0, "description": "Sum from token-tally.sh over the run's subagent_tokens.count file. 0 is a legitimate value (no subagents called)." },
+        "subagentTokensSum": { "type": "integer", "minimum": 0, "description": "Sum from token-tally.sh over the run's subagent_tokens.count file. 0 is a legitimate value (no subagents called, or the file never got written because the hook didn't fire — check hooksFired to distinguish)." },
         "totalTokens": { "type": ["integer", "null"], "minimum": 0, "description": "mainSessionTokens + subagentTokensSum, or null if mainSessionTokens is null (in which case subagentTokensSum alone is a known lower bound, not the true total)." },
-        "totalCostUsd": { "type": ["number", "null"], "minimum": 0, "description": "Rough order-of-magnitude estimate only: totalTokens * APPROX_USD_PER_TOKEN (see hooks/loop-log.sh or the skill's run_summary step for the current constant, default 0.000003 = $3/million tokens as of writing). Deliberately does NOT distinguish input/output/cache-write/cache-read pricing tiers, which differ by roughly 10x on Claude — this is for a quick 'is this in the right ballpark' check, not for billing or precise budget tracking. Use total_cost_usd from claude -p's --output-format json result instead when exactness matters. null if totalTokens is null (can't estimate without a token count)." },
+        "totalCostUsd": { "type": ["number", "null"], "minimum": 0, "description": "A rough order-of-magnitude estimate ONLY, for when cliTotalCostUsd (below) is unavailable. Do not use one flat blended per-token rate — that was tried in practice and came out 4.6x too high (estimated $3.44 vs actual $0.74) on a run that was 94% cache_read_input_tokens, which price far below input/output/cache-write tokens; weight cache_read_input_tokens much lower than the others in whatever formula you use. Always prefer cliTotalCostUsd when it exists. null if totalTokens is null (can't estimate without a token count)." },
+        "cliTotalCostUsd": { "type": ["number", "null"], "minimum": 0, "description": "THE authoritative cost — claude -p's --output-format json result.total_cost_usd, verbatim. Always quote this to the user over totalCostUsd when both exist. This exact field name is now canonical; earlier runs invented three different names for this same value (accurateTotalCostUsd, actualTotalCostUsdFromCli, accurateTotalCostUsdFromCli) before this schema existed — don't reintroduce a fourth." },
         "criteriaMet": { "type": "array", "items": { "type": "string" } },
-        "criteriaPending": { "type": "array", "items": { "type": "string" } }
+        "criteriaPending": { "type": "array", "items": { "type": "string" } },
+        "note": { "type": ["string", "null"], "description": "Free-text context worth keeping — what happened, anything that surprised you." }
       },
       "additionalProperties": false
     }
