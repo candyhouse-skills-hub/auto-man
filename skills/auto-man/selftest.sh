@@ -12,8 +12,8 @@ FAIL=0
 pass() { echo "  ok   $1"; }
 fail() { echo "  FAIL $1"; FAIL=1; }
 
-echo "== 1. Hook scripts: bash syntax check =="
-for h in "$SKILL_DIR"/templates/hooks/*.sh; do
+echo "== 1. Hook scripts and *.sh.tmpl templates: bash syntax check =="
+for h in "$SKILL_DIR"/templates/hooks/*.sh "$SKILL_DIR"/templates/*.sh.tmpl; do
   name="$(basename "$h")"
   if bash -n "$h" >/dev/null 2>&1; then pass "$name"; else fail "$name (syntax error)"; fi
 done
@@ -124,6 +124,73 @@ sys.exit(1 if missing else 0)
    || { echo "  FAIL evidence.json references an artifact path that no longer exists"; echo "FAILMARK" >> "$SCRATCH/.result"; }
 )
 if [ -f "$SCRATCH/.result" ]; then FAIL=1; fi
+
+echo "== 7. arch-delta.sh.tmpl harness: risk flags fire on a synthetic diff, output matches its schema =="
+SCRATCH2=$(mktemp -d)
+trap 'rm -rf "$SCRATCH" "$SCRATCH2"' EXIT
+(
+  cd "$SCRATCH2" || exit 1
+  git init -q .
+  git config user.email "selftest@example.com"
+  git config user.name "selftest"
+  mkdir -p src/auth
+  echo "console.log('hello')" > src/index.js
+  echo '{"name":"x","version":"1.0.0","dependencies":{}}' > package.json
+  echo "test('x', () => {})" > src/index.test.js
+  git add -A && git commit -q -m "base"
+  BASE_REF=$(git rev-parse HEAD)
+
+  # A synthetic diff shaped to trip three distinct, independently-detected
+  # risk flags at once: an auth-shaped path, a changed dependency manifest,
+  # and a deleted test file.
+  echo "function login() {}" > src/auth/login.js
+  echo '{"name":"x","version":"1.0.0","dependencies":{"left-pad":"^1.0.0"}}' > package.json
+  rm src/index.test.js
+  git add -A && git commit -q -m "change"
+
+  mkdir -p .workflow
+  sed "s/{{BASE_REF}}/$BASE_REF/" "$SKILL_DIR/templates/arch-delta.sh.tmpl" > .workflow/arch-delta.sh
+  chmod +x .workflow/arch-delta.sh
+
+  if output=$(bash .workflow/arch-delta.sh 2>.workflow/arch-delta.stderr); then
+    echo "  ok   arch-delta.sh exits 0 on a normal diff"
+  else
+    echo "  FAIL arch-delta.sh exited non-zero: $(cat .workflow/arch-delta.stderr 2>/dev/null)"
+    echo "FAILMARK" >> "$SCRATCH2/.result"
+  fi
+
+  if echo "$output" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+required = {'filesTouched','diffLoc','newFiles','deletedTests','skippedTestMarkers','schemaOrMigrationFiles','dependencyManifestFiles','riskFlags'}
+missing = required - set(d.keys())
+assert not missing, f'missing fields: {missing}'
+expected = {'auth', 'dependency_manifest_changed', 'deleted_tests'}
+assert expected <= set(d['riskFlags']), f'expected {expected}, got {d[\"riskFlags\"]}'
+assert d['filesTouched'] >= 3, f'expected >=3 filesTouched, got {d[\"filesTouched\"]}'
+" 2>.workflow/arch-delta-assert.stderr; then
+    echo "  ok   output has all required fields and correctly fired auth/dependency_manifest_changed/deleted_tests"
+  else
+    echo "  FAIL output missing fields or expected risk flags did not fire: $(cat .workflow/arch-delta-assert.stderr 2>/dev/null)"
+    echo "FAILMARK" >> "$SCRATCH2/.result"
+  fi
+
+  if python3 - "$SKILL_DIR/templates/arch-delta.schema.json" .workflow/artifacts/arch-delta.json <<'PYEOF'
+import json, sys
+schema = json.load(open(sys.argv[1]))
+row = json.load(open(sys.argv[2]))
+props = schema["properties"]
+missing = [k for k in row if k not in props]
+sys.exit(1 if missing else 0)
+PYEOF
+  then
+    echo "  ok   every field arch-delta.sh emits is declared in arch-delta.schema.json"
+  else
+    echo "  FAIL arch-delta.sh emitted a field not declared in arch-delta.schema.json"
+    echo "FAILMARK" >> "$SCRATCH2/.result"
+  fi
+)
+if [ -f "$SCRATCH2/.result" ]; then FAIL=1; fi
 
 echo
 if [ "$FAIL" -eq 0 ]; then

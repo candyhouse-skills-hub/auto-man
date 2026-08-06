@@ -15,6 +15,7 @@ A zero-human-intervention delivery loop for tasks with machine-checkable success
 - **Engineered to stay cheap.** `/goal` re-reads the whole main transcript every turn, so whatever sits in it is paid for again each pass. auto-man keeps it lean: context-heavy work runs in throwaway subagents that return only a summary, large output goes to a file with just a count returned, and the judge runs once with a narrow brief instead of riding along. The bulky detail never gets re-charged into the loop.
 - **An honest cost number at the end.** Every run reports `totalTokens = mainSessionTokens + subagentTokensSum` plus a rough USD estimate — subagent spend tallied mechanically by a hook, not taken from `/goal`'s self-report (which leaves it out), so it's the real total, not an undercount.
 - **Plan-first.** It always executes from a confirmed, detailed plan — give a one-line task and it drafts one and checks with you before touching anything.
+- **Review that scales with run count, not diff count.** Reading every diff caps delivery speed at review speed; never reading one loses real architectural control. Each run mechanically derives an `arch-delta` — what shape changed (files, dependencies, schema/migration touches, deleted tests) and whether it hit a fixed set of high-blast-radius risk areas (auth, payment, migrations, public API, secrets). A risk hit surfaces immediately in that run's report; everything else queues for a batch review (Step 8) an owner can read in minutes across many runs, not hours across many diffs.
 
 ## Prerequisites
 
@@ -55,7 +56,7 @@ Note: this skill only runs when explicitly invoked with `/auto-man` — it's nev
 
 ## Learn More
 
-- [`skills/auto-man/SKILL.md`](./skills/auto-man/SKILL.md) — the full step-by-step: establish the plan → isolate → instantiate (matching a recipe if one applies) → supervised pass → hands-off run → verify the hooks fired → fold lessons back in → optional standalone retro.
+- [`skills/auto-man/SKILL.md`](./skills/auto-man/SKILL.md) — the full step-by-step: establish the plan → isolate → instantiate (matching a recipe if one applies) → supervised pass → hands-off run → verify the hooks fired → fold lessons back in → optional standalone retro → optional standalone architecture batch review.
 - [`skills/auto-man/recipes/README.md`](./skills/auto-man/recipes/README.md) — the domain-recipe layer, and how to add one.
 
 ## For skill maintainers: where improvements must land
