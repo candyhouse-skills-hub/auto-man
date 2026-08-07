@@ -125,7 +125,7 @@ sys.exit(1 if missing else 0)
 )
 if [ -f "$SCRATCH/.result" ]; then FAIL=1; fi
 
-echo "== 7. arch-delta.sh.tmpl harness: risk flags fire on a synthetic diff, output matches its schema =="
+echo "== 7. arch-delta.sh.tmpl harness: shape is derived correctly, review answer round-trips, unfilled placeholder refuses =="
 SCRATCH2=$(mktemp -d)
 trap 'rm -rf "$SCRATCH" "$SCRATCH2"' EXIT
 (
@@ -133,23 +133,22 @@ trap 'rm -rf "$SCRATCH" "$SCRATCH2"' EXIT
   git init -q .
   git config user.email "selftest@example.com"
   git config user.name "selftest"
-  mkdir -p src/auth
-  echo "console.log('hello')" > src/index.js
-  echo '{"name":"x","version":"1.0.0","dependencies":{}}' > package.json
-  echo "test('x', () => {})" > src/index.test.js
+  echo "console.log('hello')" > src.js
+  echo '{"name":"x","version":"1.0.0"}' > package.json
+  echo "test('x', () => {})" > src.test.js
   git add -A && git commit -q -m "base"
   BASE_REF=$(git rev-parse HEAD)
 
-  # A synthetic diff shaped to trip three distinct, independently-detected
-  # risk flags at once: an auth-shaped path, a changed dependency manifest,
-  # and a deleted test file.
-  echo "function login() {}" > src/auth/login.js
-  echo '{"name":"x","version":"1.0.0","dependencies":{"left-pad":"^1.0.0"}}' > package.json
-  rm src/index.test.js
+  # Synthetic diff: one file added, one modified, one deleted — enough to
+  # exercise every derived field independently.
+  echo "function login() {}" > login.js
+  echo '{"name":"x","version":"2.0.0"}' > package.json
+  rm src.test.js
   git add -A && git commit -q -m "change"
 
   mkdir -p .workflow
-  sed "s/{{BASE_REF}}/$BASE_REF/" "$SKILL_DIR/templates/arch-delta.sh.tmpl" > .workflow/arch-delta.sh
+  sed -e "s/{{BASE_REF}}/$BASE_REF/" -e "s/{{HUMAN_REVIEW_REQUESTED}}/true/" \
+    "$SKILL_DIR/templates/arch-delta.sh.tmpl" > .workflow/arch-delta.sh
   chmod +x .workflow/arch-delta.sh
 
   if output=$(bash .workflow/arch-delta.sh 2>.workflow/arch-delta.stderr); then
@@ -162,17 +161,30 @@ trap 'rm -rf "$SCRATCH" "$SCRATCH2"' EXIT
   if echo "$output" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-required = {'filesTouched','diffLoc','newFiles','deletedTests','skippedTestMarkers','schemaOrMigrationFiles','dependencyManifestFiles','riskFlags'}
+required = {'filesTouched','diffLoc','newFiles','deletedFiles','humanReviewRequested'}
 missing = required - set(d.keys())
 assert not missing, f'missing fields: {missing}'
-expected = {'auth', 'dependency_manifest_changed', 'deleted_tests'}
-assert expected <= set(d['riskFlags']), f'expected {expected}, got {d[\"riskFlags\"]}'
-assert d['filesTouched'] >= 3, f'expected >=3 filesTouched, got {d[\"filesTouched\"]}'
+assert d['humanReviewRequested'] is True, 'humanReviewRequested did not round-trip as boolean true'
+assert d['filesTouched'] == 3, f'expected 3 filesTouched, got {d[\"filesTouched\"]}'
+assert d['newFiles'] == ['login.js'], f'expected [login.js], got {d[\"newFiles\"]}'
+assert d['deletedFiles'] == ['src.test.js'], f'expected [src.test.js], got {d[\"deletedFiles\"]}'
+assert d['diffLoc'] > 0, 'diffLoc should be non-zero for a real diff'
 " 2>.workflow/arch-delta-assert.stderr; then
-    echo "  ok   output has all required fields and correctly fired auth/dependency_manifest_changed/deleted_tests"
+    echo "  ok   derived shape is correct and humanReviewRequested round-trips as a real boolean"
   else
-    echo "  FAIL output missing fields or expected risk flags did not fire: $(cat .workflow/arch-delta-assert.stderr 2>/dev/null)"
+    echo "  FAIL derived shape wrong or review answer lost: $(cat .workflow/arch-delta-assert.stderr 2>/dev/null)"
     echo "FAILMARK" >> "$SCRATCH2/.result"
+  fi
+
+  # The Step 0 question being skipped must be a hard stop, not a silent
+  # default — a fabricated "false" here would record oversight the user
+  # never actually declined.
+  sed -e "s/{{BASE_REF}}/$BASE_REF/" "$SKILL_DIR/templates/arch-delta.sh.tmpl" > .workflow/arch-delta-unfilled.sh
+  if bash .workflow/arch-delta-unfilled.sh >/dev/null 2>&1; then
+    echo "  FAIL arch-delta.sh ran with an unfilled HUMAN_REVIEW_REQUESTED instead of refusing"
+    echo "FAILMARK" >> "$SCRATCH2/.result"
+  else
+    echo "  ok   refuses to run when the Step 0 review question was never answered"
   fi
 
   if python3 - "$SKILL_DIR/templates/arch-delta.schema.json" .workflow/artifacts/arch-delta.json <<'PYEOF'

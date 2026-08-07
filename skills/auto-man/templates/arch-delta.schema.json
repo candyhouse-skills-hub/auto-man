@@ -1,9 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "auto-man cross-run architecture delta (~/.claude/auto-man/arch-delta.jsonl)",
-  "description": "One line per completed run — a mechanically-derived summary of what SHAPE of the system changed, deliberately NOT the diff itself. Exists so a human owner can review O(subsystems) per batch (see SKILL.md Step 8) instead of O(diffs) per run. Distinct from ledger.jsonl: the ledger is quantitative run telemetry (cost/turns/outcome) sized for MAX_TURNS derivation; this file is qualitative 'what changed shape', sized for a human batch review. Append-only: never rewrite a prior line except to set reviewedAt, and only Step 8 may do that, only after explicit human acknowledgment.",
+  "description": "One line per completed run — a mechanically-derived summary of what SHAPE of the system changed, deliberately NOT the diff itself. Exists so a human owner can review O(subsystems) per batch (see SKILL.md Step 8) instead of O(diffs) per run. Distinct from ledger.jsonl: the ledger is quantitative run telemetry (cost/turns/outcome) sized for MAX_TURNS derivation; this file is qualitative 'what changed shape', sized for a human batch review. Every field here except humanReviewRequested is neutral description — nothing in this file judges whether a change was risky; that judgment is the human's, made at Step 0 and recorded in humanReviewRequested. Append-only: never rewrite a prior line except to set reviewedAt, and only Step 8 may do that, only after explicit human acknowledgment.",
   "type": "object",
-  "required": ["date", "project", "runRef", "filesTouched", "diffLoc", "riskFlags", "reviewedAt"],
+  "required": ["date", "project", "runRef", "filesTouched", "diffLoc", "humanReviewRequested", "reviewedAt"],
   "properties": {
     "date": { "type": "string", "format": "date", "description": "YYYY-MM-DD the run completed" },
     "project": { "type": "string", "description": "Project name or path, for grouping in batch review" },
@@ -11,33 +11,16 @@
     "filesTouched": { "type": "integer", "minimum": 0 },
     "diffLoc": { "type": "integer", "minimum": 0, "description": "Total lines added+removed across the final diff" },
     "newFiles": { "type": "array", "items": { "type": "string" } },
-    "deletedTests": { "type": "array", "items": { "type": "string" }, "description": "Test files removed by this run's diff, by path" },
-    "skippedTestMarkers": { "type": "integer", "minimum": 0, "description": "Count of newly-added .skip(/.only(/xit(/xdescribe( markers" },
-    "schemaOrMigrationFiles": { "type": "array", "items": { "type": "string" } },
-    "dependencyManifestFiles": { "type": "array", "items": { "type": "string" }, "description": "package.json/requirements.txt/Cargo.toml/go.mod touched by this run" },
-    "riskFlags": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "enum": ["auth", "payment", "migration_or_schema", "public_api", "deleted_tests", "skipped_tests", "dependency_manifest_changed", "secrets"]
-      },
-      "description": "Mechanically-detected touch on a fixed list of high-blast-radius areas (kept in sync with arch-delta.sh.tmpl and SKILL.md Step 0's plan-risk classification). A NON-EMPTY array means Step 6's report to the user must recommend immediate review of THIS run's diff — do not let it wait for the next Step 8 batch."
-    },
-    "criteriaShapes": {
-      "type": ["object", "null"],
-      "description": "Copied from this same run's ledger.jsonl row (see ledger.schema.json) so a Step 8 batch review can see verification strength without cross-referencing two files. A grep-heavy shape is itself a reason to review now even with an empty riskFlags — a structural check only proves a shape exists, not that the behavior works.",
-      "properties": {
-        "grepCount": { "type": "integer", "minimum": 0 },
-        "exitCodeCount": { "type": "integer", "minimum": 0 },
-        "fileExistsCount": { "type": "integer", "minimum": 0 },
-        "otherCount": { "type": "integer", "minimum": 0 }
-      }
+    "deletedFiles": { "type": "array", "items": { "type": "string" } },
+    "humanReviewRequested": {
+      "type": "boolean",
+      "description": "The user's OWN answer, given at Step 0 before implementation started, to 'does this need your full review once it's done?'. This is the single routing signal for Step 6's reminder and Step 8's bucketing — there is deliberately no heuristic risk classification anywhere in this file. Never infer this value from the diff — it comes from the user, or the run has no business claiming an answer."
     },
     "reviewedAt": {
       "type": ["string", "null"],
       "format": "date",
       "description": "Null means still pending a human's eyes. Set ONLY by Step 8, ONLY on that row after the human has actually acknowledged it (individually, or as part of an explicitly-accepted 'delivered clean' rollup) — Step 6 must always write null here. A row silently marked reviewed without a human having looked defeats the entire point of this file."
     },
-    "notes": { "type": "string", "description": "Free-text one-liner, e.g. why a risk flag fired if not obvious from the file list alone" }
+    "notes": { "type": "string", "description": "Free-text one-liner, e.g. anything about the change's shape worth a sentence that the numbers alone don't convey" }
   }
 }

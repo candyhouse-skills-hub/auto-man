@@ -7,24 +7,37 @@
 # runs' worth of *shape change* into something a human owner can read in
 # O(subsystems) instead of O(diffs). See SKILL.md Step 6/Step 8.
 #
-# Every signal below is a grep/diff heuristic, not an AST-level truth — false
-# positives are acceptable (a human glances and dismisses one), false
-# negatives are what this exists to minimize, so keep patterns broad rather
-# than exact. If a real miss turns up during a Step 8 review, that's a lesson
-# to fold back into this file's risk patterns (proposal-only, see Step 6/7),
-# not a one-off silent fix.
+# Division of labor:
+#   - This script answers "what shape changed" with neutral, descriptive
+#     numbers and file lists. It makes NO judgment about whether the change is
+#     risky, and it does not route anything.
+#   - "Is this change risky enough to warrant a full human review?" is a domain
+#     judgment the human makes at Step 0, before implementation, and it travels
+#     here as {{HUMAN_REVIEW_REQUESTED}}. That answer — not any heuristic in
+#     this file — is what Step 6's reminder and Step 8's routing key off.
 set -uo pipefail
 
 BASE_REF="{{BASE_REF}}"  # filled at Step 2: `git rev-parse HEAD` captured right
                           # after Step 1's isolation, before any implementation commit
-# Guard checks structurally (any literal "{{" left in the value) rather than
-# against the placeholder token spelled out again — spelling it out a second
+HUMAN_REVIEW_REQUESTED="{{HUMAN_REVIEW_REQUESTED}}"  # filled at Step 2 from the
+                          # user's own Step 0 answer: "true" or "false"
+
+# Guards check structurally (any literal "{{" left in the value) rather than
+# against the placeholder tokens spelled out again — spelling one out a second
 # time here would itself get overwritten by a naive find-and-replace of the
 # assignment above, silently defeating this exact check.
 if [ -z "$BASE_REF" ] || printf '%s' "$BASE_REF" | grep -q '{{'; then
   echo "arch-delta.sh: BASE_REF placeholder was never filled in at Step 2 — refusing to run against an undefined base." >&2
   exit 1
 fi
+if [ -z "$HUMAN_REVIEW_REQUESTED" ] || printf '%s' "$HUMAN_REVIEW_REQUESTED" | grep -q '{{'; then
+  echo "arch-delta.sh: HUMAN_REVIEW_REQUESTED placeholder was never filled in at Step 2 — the Step 0 review question was skipped, and this row would misreport it as answered." >&2
+  exit 1
+fi
+case "$HUMAN_REVIEW_REQUESTED" in
+  true|false) ;;
+  *) echo "arch-delta.sh: HUMAN_REVIEW_REQUESTED must be exactly 'true' or 'false', got: $HUMAN_REVIEW_REQUESTED" >&2; exit 1 ;;
+esac
 
 ARTIFACTS_DIR=".workflow/artifacts"
 mkdir -p "$ARTIFACTS_DIR"
@@ -33,38 +46,15 @@ touched_files=$(git diff --name-only "$BASE_REF" HEAD 2>/dev/null || true)
 new_files=$(git diff --name-only --diff-filter=A "$BASE_REF" HEAD 2>/dev/null || true)
 deleted_files=$(git diff --name-only --diff-filter=D "$BASE_REF" HEAD 2>/dev/null || true)
 shortstat=$(git diff --shortstat "$BASE_REF" HEAD 2>/dev/null || true)
-added_lines=$(git diff "$BASE_REF" HEAD 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' || true)
 
 files_touched=$(printf '%s\n' "$touched_files" | grep -c . || true)
 diff_loc=$(printf '%s\n' "$shortstat" | grep -oE '[0-9]+ (insertion|deletion)' | grep -oE '^[0-9]+' | awk '{s+=$1} END {print s+0}')
-deleted_tests=$(printf '%s\n' "$deleted_files" | grep -iE '\.(test|spec)\.' || true)
-skipped_test_markers=$(printf '%s\n' "$added_lines" | grep -cE '\.(skip|only)\(|xit\(|xdescribe\(' || true)
-schema_files=$(printf '%s\n' "$touched_files" | grep -iE 'migrat|schema|\.sql$' || true)
-dep_manifest_files=$(printf '%s\n' "$touched_files" | grep -E '(^|/)(package\.json|requirements\.txt|Cargo\.toml|go\.mod)$' || true)
-
-# Fixed risk vocabulary — kept in sync with SKILL.md Step 0's plan-risk
-# classification and Step 8's routing rule. A non-empty riskFlags list means
-# this run's report (Step 6) must tell the user to look now, not wait for the
-# next batch review.
-risk_flags=""
-printf '%s\n' "$touched_files" | grep -qiE 'auth|session|credential' && risk_flags="$risk_flags,auth"
-printf '%s\n' "$touched_files" | grep -qiE 'payment|billing|checkout' && risk_flags="$risk_flags,payment"
-[ -n "$schema_files" ] && risk_flags="$risk_flags,migration_or_schema"
-printf '%s\n' "$touched_files" | grep -qiE '(^|/)(api|routes?|public)/' && risk_flags="$risk_flags,public_api"
-[ -n "$deleted_tests" ] && risk_flags="$risk_flags,deleted_tests"
-[ "${skipped_test_markers:-0}" -gt 0 ] 2>/dev/null && risk_flags="$risk_flags,skipped_tests"
-[ -n "$dep_manifest_files" ] && risk_flags="$risk_flags,dependency_manifest_changed"
-printf '%s\n' "$touched_files" | grep -qiE 'secret|encrypt|\.key$|\.pem$' && risk_flags="$risk_flags,secrets"
-risk_flags="${risk_flags#,}"
 
 export ARCH_NEW_FILES="$new_files"
-export ARCH_DELETED_TESTS="$deleted_tests"
-export ARCH_SCHEMA_FILES="$schema_files"
-export ARCH_DEP_FILES="$dep_manifest_files"
-export ARCH_RISK_FLAGS="$risk_flags"
+export ARCH_DELETED_FILES="$deleted_files"
 export ARCH_FILES_TOUCHED="${files_touched:-0}"
 export ARCH_DIFF_LOC="${diff_loc:-0}"
-export ARCH_SKIPPED_TEST_MARKERS="${skipped_test_markers:-0}"
+export ARCH_HUMAN_REVIEW_REQUESTED="$HUMAN_REVIEW_REQUESTED"
 
 python3 <<'PYEOF'
 import json, os
@@ -77,11 +67,8 @@ row = {
     "filesTouched": int(os.environ.get("ARCH_FILES_TOUCHED", "0") or 0),
     "diffLoc": int(os.environ.get("ARCH_DIFF_LOC", "0") or 0),
     "newFiles": lines("ARCH_NEW_FILES"),
-    "deletedTests": lines("ARCH_DELETED_TESTS"),
-    "skippedTestMarkers": int(os.environ.get("ARCH_SKIPPED_TEST_MARKERS", "0") or 0),
-    "schemaOrMigrationFiles": lines("ARCH_SCHEMA_FILES"),
-    "dependencyManifestFiles": lines("ARCH_DEP_FILES"),
-    "riskFlags": [f for f in os.environ.get("ARCH_RISK_FLAGS", "").split(",") if f],
+    "deletedFiles": lines("ARCH_DELETED_FILES"),
+    "humanReviewRequested": os.environ.get("ARCH_HUMAN_REVIEW_REQUESTED") == "true",
 }
 
 os.makedirs(".workflow/artifacts", exist_ok=True)
