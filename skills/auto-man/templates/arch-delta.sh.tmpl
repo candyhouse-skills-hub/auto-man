@@ -18,9 +18,16 @@
 set -uo pipefail
 
 BASE_REF="{{BASE_REF}}"  # filled at Step 2: `git rev-parse HEAD` captured right
-                          # after Step 1's isolation, before any implementation commit
+                          # after Step 1's isolation, before any implementation commit.
+                          # For a multi-phase plan, re-fill this line before each
+                          # phase's own Step 6 run — it should be that phase's own
+                          # start commit, not the whole plan's, see SKILL.md's
+                          # "Multi-phase plans" section.
 HUMAN_REVIEW_REQUESTED="{{HUMAN_REVIEW_REQUESTED}}"  # filled at Step 2 from the
                           # user's own Step 0 answer: "true" or "false"
+PHASE_NAME=""             # multi-phase plans only: fill with the current phase's
+                          # name (e.g. "phase-2-auth") before that phase's Step 6
+                          # run; leave blank — not "{{...}}" — for a single-phase run
 
 # Guards check structurally (any literal "{{" left in the value) rather than
 # against the placeholder tokens spelled out again — spelling one out a second
@@ -55,6 +62,7 @@ export ARCH_DELETED_FILES="$deleted_files"
 export ARCH_FILES_TOUCHED="${files_touched:-0}"
 export ARCH_DIFF_LOC="${diff_loc:-0}"
 export ARCH_HUMAN_REVIEW_REQUESTED="$HUMAN_REVIEW_REQUESTED"
+export ARCH_PHASE="$PHASE_NAME"
 
 python3 <<'PYEOF'
 import json, os
@@ -69,6 +77,7 @@ row = {
     "newFiles": lines("ARCH_NEW_FILES"),
     "deletedFiles": lines("ARCH_DELETED_FILES"),
     "humanReviewRequested": os.environ.get("ARCH_HUMAN_REVIEW_REQUESTED") == "true",
+    "phase": os.environ.get("ARCH_PHASE") or None,
 }
 
 os.makedirs(".workflow/artifacts", exist_ok=True)

@@ -7,6 +7,7 @@
   "properties": {
     "date": { "type": "string", "format": "date", "description": "YYYY-MM-DD the run completed" },
     "project": { "type": "string", "description": "Project name or path, for grouping in batch review" },
+    "phase": { "type": ["string", "null"], "description": "Phase name within a multi-phase plan this row belongs to (see SKILL.md's 'Multi-phase plans' section); null for an ordinary single-phase run. Lets Step 8 group a plan's phases together instead of reading them as unrelated runs of the same project." },
     "runRef": { "type": "string", "description": "This run's LOOP_RUN_ID or the delivered commit hash — lets a batch review pull the full diff for one flagged row without needing anything else" },
     "filesTouched": { "type": "integer", "minimum": 0 },
     "diffLoc": { "type": "integer", "minimum": 0, "description": "Total lines added+removed across the final diff" },

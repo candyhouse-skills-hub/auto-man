@@ -15,6 +15,7 @@ A zero-human-intervention delivery loop for tasks with machine-checkable success
 - **Engineered to stay cheap.** `/goal` re-reads the whole main transcript every turn, so whatever sits in it is paid for again each pass. auto-man keeps it lean: context-heavy work runs in throwaway subagents that return only a summary, large output goes to a file with just a count returned, and the judge runs once with a narrow brief instead of riding along. The bulky detail never gets re-charged into the loop.
 - **An honest cost number at the end.** Every run reports `totalTokens = mainSessionTokens + subagentTokensSum` plus a rough USD estimate — subagent spend tallied mechanically by a hook, not taken from `/goal`'s self-report (which leaves it out), so it's the real total, not an undercount.
 - **Plan-first.** It always executes from a confirmed, detailed plan — give a one-line task and it drafts one and checks with you before touching anything.
+- **Multi-phase plans stop where you say, not just where it says.** A plan that splits into separable phases gets a gate cadence you choose once up front — every phase, every N, or a batch review at the end — enforced by the phase boundary baked into that phase's own `/goal` condition, not by the orchestrator remembering to pause. Each phase delivers incrementally, so stopping midway keeps whatever already shipped.
 - **Review that scales with run count, not diff count.** Reading every diff caps delivery speed at review speed; never reading one loses real architectural control. So it asks you once, up front, whether this particular change will want your eyes — you know your codebase's stakes better than any heuristic run against the finished diff. Each run then mechanically derives an `arch-delta` (what shape changed: files touched, diff size, files added and removed) and routes on your answer: the ones you flagged come straight back to you, everything else queues for a batch review (Step 8) an owner can read in minutes across many runs, not hours across many diffs.
 
 ## Prerequisites
@@ -56,7 +57,7 @@ Note: this skill only runs when explicitly invoked with `/auto-man` — it's nev
 
 ## Learn More
 
-- [`skills/auto-man/SKILL.md`](./skills/auto-man/SKILL.md) — the full step-by-step: establish the plan → isolate → instantiate (matching a recipe if one applies) → supervised pass → hands-off run → verify the hooks fired → fold lessons back in → optional standalone retro → optional standalone architecture batch review.
+- [`skills/auto-man/SKILL.md`](./skills/auto-man/SKILL.md) — the full step-by-step: establish the plan → isolate → instantiate (matching a recipe if one applies) → supervised pass → hands-off run → verify the hooks fired → fold lessons back in → optional standalone retro → optional standalone architecture batch review. See its "Multi-phase plans" section for repeating this cycle per phase on a plan with several.
 - [`skills/auto-man/recipes/README.md`](./skills/auto-man/recipes/README.md) — the domain-recipe layer, and how to add one.
 
 ## For skill maintainers: where improvements must land

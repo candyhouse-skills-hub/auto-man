@@ -15,6 +15,7 @@
   "properties": {
     "date": { "type": "string", "format": "date", "description": "YYYY-MM-DD the run completed" },
     "project": { "type": "string", "description": "Project name or path, for grouping/filtering" },
+    "phase": { "type": ["string", "null"], "description": "Phase name within a multi-phase plan this run delivered (see SKILL.md's 'Multi-phase plans' section); null for an ordinary single-phase run. taskShape/turnsUsed/etc. below describe just this phase's slice when set, not the whole plan." },
     "taskShape": {
       "type": "object",
       "description": "Cheap, comparable descriptors of what kind of task this was — used to decide whether another run's turnsUsed is a fair comparison for MAX_TURNS derivation",

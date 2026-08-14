@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "workflow loop state (.workflow/state.json)",
-  "description": "Single source of truth for in-run progress. Read at the start of every iteration, written at the end. Must survive transcript compaction, --resume, and crash restart — nothing here may live only in the conversation.",
+  "description": "Single source of truth for in-run progress. Read at the start of every iteration, written at the end. Must survive transcript compaction, --resume, and crash restart — nothing here may live only in the conversation. `phases`/`currentPhase`/`gateCadence`/`gateBatchSize` are only present for a multi-phase plan (see SKILL.md's 'Multi-phase plans' section) — absent entirely for an ordinary single-phase run, so this stays backward compatible.",
   "type": "object",
   "required": ["iteration", "criteriaMet", "criteriaPending", "blockers", "decisions"],
   "properties": {
@@ -10,6 +10,29 @@
     "criteriaPending": { "type": "array", "items": { "type": "string" } },
     "lastError": { "type": ["string", "null"] },
     "blockers": { "type": "array", "items": { "type": "string" } },
-    "decisions": { "type": "array", "items": { "type": "string" } }
+    "decisions": { "type": "array", "items": { "type": "string" } },
+    "planBaseRef": { "type": ["string", "null"], "description": "The whole-plan start commit, captured once at Step 1 — distinct from each phase's own baseRef below, which is what arch-delta.sh actually diffs against." },
+    "gateCadence": {
+      "type": ["string", "null"],
+      "enum": ["every_phase", "batch", "batch_review_at_end", null],
+      "description": "The user's own Step 0 answer for a multi-phase plan: how often to stop and ask before starting the next phase. Never inferred — null means the question hasn't been asked yet, not a default of any kind."
+    },
+    "gateBatchSize": { "type": ["integer", "null"], "minimum": 1, "description": "Only meaningful when gateCadence is 'batch' — stop after every N phases." },
+    "currentPhase": { "type": ["string", "null"], "description": "Name of the phase currently in progress; null once every phase is done (or for a non-phased run)." },
+    "phases": {
+      "type": "array",
+      "description": "One entry per phase, in execution order. Empty/absent for a non-phased run.",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "criteriaNames"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string", "enum": ["pending", "in_progress", "done", "skipped"] },
+          "criteriaNames": { "type": "array", "items": { "type": "string" }, "description": "The subset of verify.sh's add_criterion names that belong to this phase — for reporting only; allPass itself is never scoped, see the 'Multi-phase plans' section." },
+          "baseRef": { "type": ["string", "null"], "description": "Commit hash captured when this phase began — what this phase's arch-delta.sh run diffs against." },
+          "deliveredAt": { "type": ["string", "null"], "description": "This phase's own delivery: a commit hash, PR URL, or date once Step 6's delivery path ran for this phase specifically. Null while still pending." }
+        }
+      }
+    }
   }
 }
